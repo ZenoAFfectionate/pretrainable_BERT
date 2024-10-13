@@ -160,10 +160,7 @@ class BERTTrainer:
 
             # masked language modeling prediction accuracy
             mask = data["bert_label"] != 0
-            print(mask[0])
-            print(mask_lm_output.argmax(dim=-1)[0])
-            print(data["bert_label"][0])
-            mlm_correct = mask_lm_output.argmax(dim=-1).eq(data["bert_label"])
+            mlm_correct = mask_lm_output.argmax(dim=-1).eq(data["bert_label"]) & mask
             total_mlm_correct += mlm_correct.sum().item()
             total_mlm_element += mask.sum().item()
 
@@ -171,15 +168,15 @@ class BERTTrainer:
                 "lr": f"{self.optim_schedule.lr:.2e}",
                 "nsp_loss": f"{next_loss.item():.2e}",
                 "mlm_loss": f"{mask_loss.item():.2f}",
-                "nsp_acc" : f"{total_nsp_correct / total_nsp_element * 100:.3f}",
-                "mlm_acc" : f"{total_mlm_correct / total_mlm_element * 100:.3f}"
+                "nsp_acc" : f"{total_nsp_correct / total_nsp_element * 100:.3f}%",
+                "mlm_acc" : f"{total_mlm_correct / total_mlm_element * 100:.3f}%"
             }
 
             data_iter.set_postfix(post_fix)
 
-        print(f"[{str_code}] epoch {epoch:3d}, avg_loss=", avg_loss / len(data_iter), \
-               " nsp_acc=", total_nsp_correct * 100.0 / total_nsp_element, \
-               " mlm_acc=", total_mlm_correct * 100.0 / total_mlm_element)
+        print(f"[{str_code}] epoch {epoch:3d}, avg_loss={avg_loss / len(data_iter):.2f}", \
+               f" nsp_acc={total_nsp_correct * 100.0 / total_nsp_element:.3f}%", \
+               f" mlm_acc={total_mlm_correct * 100.0 / total_mlm_element:.3f}%")
 
     def save(self, epoch, file_path="checkpoint/bert_trained.model"):
         """
@@ -235,8 +232,6 @@ def train():
     print("Loading Train Dataset", args.train_dataset)
     train_dataset = BERTDataset(args.train_dataset, vocab, seq_len=args.seq_len,
                                 corpus_lines=args.corpus_lines, on_memory=args.on_memory)
-
-    print(train_dataset[0])
 
     print("Loading Test Dataset", args.test_dataset)
     test_dataset = BERTDataset(args.test_dataset, vocab, seq_len=args.seq_len, on_memory=args.on_memory) \

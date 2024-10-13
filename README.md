@@ -1,12 +1,4 @@
-# BERT-pytorch
-
-[![LICENSE](https://img.shields.io/github/license/codertimo/BERT-pytorch.svg)](https://github.com/codertimo/BERT-pytorch/blob/master/LICENSE)
-![GitHub issues](https://img.shields.io/github/issues/codertimo/BERT-pytorch.svg)
-[![GitHub stars](https://img.shields.io/github/stars/codertimo/BERT-pytorch.svg)](https://github.com/codertimo/BERT-pytorch/stargazers)
-[![CircleCI](https://circleci.com/gh/codertimo/BERT-pytorch.svg?style=shield)](https://circleci.com/gh/codertimo/BERT-pytorch)
-[![PyPI](https://img.shields.io/pypi/v/bert-pytorch.svg)](https://pypi.org/project/bert_pytorch/)
-[![PyPI - Status](https://img.shields.io/pypi/status/bert-pytorch.svg)](https://pypi.org/project/bert_pytorch/)
-[![Documentation Status](https://readthedocs.org/projects/bert-pytorch/badge/?version=latest)](https://bert-pytorch.readthedocs.io/en/latest/?badge=latest)
+# BERT from Scratch
 
 Pytorch implementation of Google AI's 2018 BERT, with simple annotation
 
@@ -29,7 +21,7 @@ and I expect many further papers about BERT will be published very soon.
 This repo is implementation of BERT. Code is very simple and easy to understand fastly.
 Some of these codes are based on [The Annotated Transformer](http://nlp.seas.harvard.edu/2018/04/03/attention.html)
 
-Currently this project is working on progress. And the code is not verified yet.
+Currently this project is working on progress. And the code is partly verified now.
 
 ## Installation
 ```
@@ -46,21 +38,16 @@ Welcome to the \t the jungle\n
 I can stay \t here all night\n
 ```
 
-or tokenized corpus (tokenization is not in package)
-```
-Wel_ _come _to _the \t _the _jungle\n
-_I _can _stay \t _here _all _night\n
-```
-
-
 ### 1. Building vocab based on your corpus
 ```shell
-bert-vocab -c data/corpus.small -o data/vocab.small
+
+
 ```
 
 ### 2. Train your own BERT model
 ```shell
-bert -c data/corpus.small -v data/vocab.small -o output/bert.model
+
+
 ```
 
 ## Language Model Pre-training

@@ -22,7 +22,7 @@ class BERTDataset(Dataset):
             if on_memory:
                 self.lines = [line[:-1].split("\t") for line in tqdm.tqdm(f, desc="Loading Dataset", total=corpus_lines)]
                 self.max_sentence_length = max(len(line[0].split(' ')) + len(line[1].split(' ')) for line in self.lines)
-                print(f'Max Sentence Length: {self.max_sentence_length}')
+                print(f'Max Sentence Length of this dataset is: {self.max_sentence_length}')
                 self.corpus_lines = len(self.lines)
 
         if not on_memory:
