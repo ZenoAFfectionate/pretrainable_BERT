@@ -121,6 +121,7 @@ Label = Not Next
 
 ## Author
 Original: Junseong Kim, Scatter Lab (codertimo@gmail.com / junseong.kim@scatterlab.co.kr)
+
 Modifier: Zeno Pang(SCUT), Leeyyi(SYSU)
 
 ## Reference
