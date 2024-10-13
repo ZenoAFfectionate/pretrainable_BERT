@@ -91,10 +91,10 @@ class TorchVocab(object):
 
 class Vocab(TorchVocab):
     def __init__(self, counter, max_size=None, min_freq=1):
-        self.pad_index = 0
-        self.unk_index = 1
-        self.eos_index = 2
-        self.sos_index = 3
+        self.pad_index  = 0
+        self.unk_index  = 1
+        self.eos_index  = 2
+        self.sos_index  = 3
         self.mask_index = 4
         super().__init__(counter, specials=["<pad>", "<unk>", "<eos>", "<sos>", "<mask>"],
                          max_size=max_size, min_freq=min_freq)
@@ -117,8 +117,8 @@ class Vocab(TorchVocab):
 
 # Building Vocab with text files
 class WordVocab(Vocab):
-    def __init__(self, texts, max_size=None, min_freq=1):
-        print("Building Vocab")
+    def __init__(self, texts, max_size=None, min_freq=5):
+       #  print("Building Vocab")
         counter = Counter()
         for line in tqdm.tqdm(texts):
             if isinstance(line, list):
@@ -175,7 +175,7 @@ def build():
     parser.add_argument("-o", "--output_path", required=True, type=str)
     parser.add_argument("-s", "--vocab_size", type=int, default=None)
     parser.add_argument("-e", "--encoding", type=str, default="utf-8")
-    parser.add_argument("-m", "--min_freq", type=int, default=1)
+    parser.add_argument("-m", "--min_freq", type=int, default=5)
     args = parser.parse_args()
 
     with open(args.corpus_path, "r", encoding=args.encoding) as f:
@@ -183,3 +183,7 @@ def build():
 
     print("VOCAB SIZE:", len(vocab))
     vocab.save_vocab(args.output_path)
+
+
+if __name__ == '__main__':
+    build()

@@ -1,5 +1,6 @@
-data/
-output/
+dataset/bookcorpus/*
+dataset/wikitext-2/*
+checkpoint/
 
 # Created by .ignore support plugin (hsz.mobi)
 ### Python template

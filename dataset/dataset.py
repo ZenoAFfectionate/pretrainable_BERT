@@ -20,8 +20,9 @@ class BERTDataset(Dataset):
                     self.corpus_lines += 1
 
             if on_memory:
-                self.lines = [line[:-1].split("\t")
-                              for line in tqdm.tqdm(f, desc="Loading Dataset", total=corpus_lines)]
+                self.lines = [line[:-1].split("\t") for line in tqdm.tqdm(f, desc="Loading Dataset", total=corpus_lines)]
+                self.max_sentence_length = max(len(line[0].split(' ')) + len(line[1].split(' ')) for line in self.lines)
+                print(f'Max Sentence Length: {self.max_sentence_length}')
                 self.corpus_lines = len(self.lines)
 
         if not on_memory:
@@ -90,9 +91,9 @@ class BERTDataset(Dataset):
         return tokens, output_label
 
     def random_sent(self, index):
+        ''' sentence_1, sentence_2, lable (isNotNext:0, isNext:1) '''
         t1, t2 = self.get_corpus_line(index)
 
-        # output_text, label(isNotNext:0, isNext:1)
         if random.random() > 0.5:
             return t1, t2, 1
         else:
