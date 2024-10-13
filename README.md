@@ -132,9 +132,9 @@ Modifier: Zeno Pang(SCUT), Leeyyi(SYSU)
 [3] [Building BERT Model from Sratch](https://medium.com/data-and-beyond/complete-guide-to-building-bert-model-from-sratch-3e6562228891)
 
 ## License
-This project following Apache 2.0 License as written in LICENSE file
+This project following MIT License as written in LICENSE file
 
 ## Copyright
-Copyright 2018 Junseong Kim, Scatter Lab, respective BERT contributors
+Copyright 2018 Junseong Kim : [GitHub: BERT PyTorch Implementation](https://github.com/codertimo/BERT-pytorch)
 
-Copyright (c) 2018 Alexander Rush : [The Annotated Trasnformer](https://github.com/harvardnlp/annotated-transformer)
+Copyright 2018 Alexander Rush : [The Annotated Trasnformer](https://github.com/harvardnlp/annotated-transformer)
