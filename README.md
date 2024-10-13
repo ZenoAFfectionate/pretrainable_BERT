@@ -72,7 +72,8 @@ The parameter '-m' is used to set the minimum frequency threshold for words to b
 ### 4. Train your own BERT model
 ```shell
 cd ..
-python pretrain.py -c ./dataset/wikitext-2/train.txt -o ./dataset/wikitext-2/test/txt -v ./dataset/wikitext-2/vocabulary 
+python pretrain.py -c ./dataset/wikitext-2/train.txt -t ./dataset/wikitext-2/test.txt -v ./dataset/wikitext-2/vocabulary -o ./checkpoint/wikitext-2
+
 ```
 Remember to adjust the parameter of the model if needed!
 
