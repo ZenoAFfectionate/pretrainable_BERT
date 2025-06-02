@@ -1,0 +1,18 @@
+# 忽略 dataset 文件夹下的 wikitext 数据集
+dataset/wikitext-2/
+dataset/wikitext-103/
+
+# 忽略 checkpoint 文件夹
+checkpoint/
+
+# 忽略 Python 编译缓存
+__pycache__/
+model/__pycache__/
+dataset/__pycache__/
+
+
+*.csv
+*.txt
+*.bin
+*.zip
+*.tar.gz
