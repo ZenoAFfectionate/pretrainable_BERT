@@ -262,7 +262,7 @@ class BERTTrainer:
         }
         
         # make the store path and store
-        filename = f"epoch_{epoch}.pt" if not is_best else "best_model.pt"
+        filename = f"epoch_{epoch}.pt"
         save_path = Path(store_path) / filename
         
         torch.save(checkpoint, save_path)
