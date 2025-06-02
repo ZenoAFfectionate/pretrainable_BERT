@@ -132,7 +132,6 @@ def train():
                           cuda_devices=args.cuda_devices, log_freq=args.log_freq)
 
     best_loss = float('+inf')
-    
     logger.info("Start Training...")
     for epoch in range(args.epochs):
         is_best = False
