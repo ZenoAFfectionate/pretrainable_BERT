@@ -1,189 +1,165 @@
-import pickle
-import tqdm
-from collections import Counter
+"""BPE-based vocabulary used across the BERT pre-training pipeline.
+
+``BPEVocab`` wraps a HuggingFace ``tokenizers.Tokenizer`` but keeps the same
+lightweight API surface the rest of the project already expects:
+
+    * attributes: ``pad_index``, ``unk_index``, ``eos_index``, ``sos_index``,
+      ``mask_index``, ``stoi``, ``itos``, ``special_indices``
+    * methods:   ``encode``, ``decode``, ``to_seq``, ``from_seq``,
+                 ``save_vocab``, ``load_vocab``, ``__len__``
+
+Special tokens are pinned to indices 0–4 regardless of frequency:
+
+    0 <pad>   1 <unk>   2 <eos>   3 <sos>   4 <mask>
+
+That keeps the model's ``SegmentEmbedding(padding_idx=0)`` and the dataset's
+``CrossEntropyLoss(ignore_index=0)`` contracts unchanged when switching from
+the old whitespace vocab to sub-word BPE.
+"""
+
+from pathlib import Path
+from typing import Iterable, List, Optional, Sequence, Union
+
+from tokenizers import Tokenizer
 
 
-class TorchVocab(object):
-    """Defines a vocabulary object that will be used to numericalize a field.
-    Attributes:
-        freqs: A collections.Counter object holding the frequencies of tokens
-            in the data used to build the Vocab.
-        stoi: A collections.defaultdict instance mapping token strings to
-            numerical identifiers.
-        itos: A list of token strings indexed by their numerical identifiers.
+# Reserved special tokens (order matters: index = position in this tuple).
+SPECIAL_TOKENS: Sequence[str] = ("<pad>", "<unk>", "<eos>", "<sos>", "<mask>")
+
+PAD_INDEX, UNK_INDEX, EOS_INDEX, SOS_INDEX, MASK_INDEX = range(len(SPECIAL_TOKENS))
+
+
+class BPEVocab:
+    """Sub-word vocabulary backed by a trained BPE tokenizer.
+
+    Parameters
+    ----------
+    tokenizer : Tokenizer
+        A trained ``tokenizers.Tokenizer`` instance whose vocabulary has the
+        five special tokens at positions 0–4.
     """
 
-    def __init__(self, counter, max_size=None, min_freq=1, specials=['<pad>', '<oov>'],
-                 vectors=None, unk_init=None, vectors_cache=None):
-        """Create a Vocab object from a collections.Counter.
-        Arguments:
-            counter: collections.Counter object holding the frequencies of
-                each value found in the data.
-            max_size: The maximum size of the vocabulary, or None for no
-                maximum. Default: None.
-            min_freq: The minimum frequency needed to include a token in the
-                vocabulary. Values less than 1 will be set to 1. Default: 1.
-            specials: The list of special tokens (e.g., padding or eos) that
-                will be prepended to the vocabulary in addition to an <unk>
-                token. Default: ['<pad>']
-            vectors: One of either the available pretrained vectors
-                or custom pretrained vectors (see Vocab.load_vectors);
-                or a list of aforementioned vectors
-            unk_init (callback): by default, initialize out-of-vocabulary word vectors
-                to zero vectors; can be any function that takes in a Tensor and
-                returns a Tensor of the same size. Default: torch.Tensor.zero_
-            vectors_cache: directory for cached vectors. Default: '.vector_cache'
-        """
-        self.freqs = counter
-        counter = counter.copy()
-        min_freq = max(min_freq, 1)
+    def __init__(self, tokenizer: Tokenizer):
+        self._tokenizer = tokenizer
 
-        self.itos = list(specials)
-        # frequencies of special tokens are not counted when building vocabulary
-        # in frequency order
-        for tok in specials:
-            del counter[tok]
+        # Cache id mappings so look-ups in the dataset hot path are plain dict
+        # reads rather than cross-boundary calls into the Rust tokenizer.
+        self.stoi = dict(tokenizer.get_vocab())
+        self.itos: List[str] = [""] * len(self.stoi)
+        for tok, idx in self.stoi.items():
+            self.itos[idx] = tok
 
-        max_size = None if max_size is None else max_size + len(self.itos)
+        # Verify and expose the reserved specials.
+        for expected, idx in zip(SPECIAL_TOKENS, range(len(SPECIAL_TOKENS))):
+            actual = self.itos[idx]
+            if actual != expected:
+                raise ValueError(
+                    f"Special token mismatch at position {idx}: "
+                    f"expected {expected!r}, got {actual!r}. "
+                    "Re-train the tokenizer with the correct special token order."
+                )
 
-        # sort by frequency, then alphabetically
-        words_and_frequencies = sorted(counter.items(), key=lambda tup: tup[0])
-        words_and_frequencies.sort(key=lambda tup: tup[1], reverse=True)
+        self.pad_index = PAD_INDEX
+        self.unk_index = UNK_INDEX
+        self.eos_index = EOS_INDEX
+        self.sos_index = SOS_INDEX
+        self.mask_index = MASK_INDEX
 
-        for word, freq in words_and_frequencies:
-            if freq < min_freq or len(self.itos) == max_size:
-                break
-            self.itos.append(word)
+    # --------------------------------------------------------------- meta
 
-        # stoi is simply a reverse dict for itos
-        self.stoi = {tok: i for i, tok in enumerate(self.itos)}
-
-        self.vectors = None
-        if vectors is not None:
-            self.load_vectors(vectors, unk_init=unk_init, cache=vectors_cache)
-        else:
-            assert unk_init is None and vectors_cache is None
-
-    def __eq__(self, other):
-        if self.freqs != other.freqs:
-            return False
-        if self.stoi != other.stoi:
-            return False
-        if self.itos != other.itos:
-            return False
-        if self.vectors != other.vectors:
-            return False
-        return True
-
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.itos)
 
-    def vocab_rerank(self):
-        self.stoi = {word: i for i, word in enumerate(self.itos)}
+    @property
+    def special_indices(self) -> set:
+        return {self.pad_index, self.unk_index, self.eos_index,
+                self.sos_index, self.mask_index}
 
-    def extend(self, v, sort=False):
-        words = sorted(v.itos) if sort else v.itos
-        for w in words:
-            if w not in self.stoi:
-                self.itos.append(w)
-                self.stoi[w] = len(self.itos) - 1
+    @property
+    def tokenizer(self) -> Tokenizer:
+        """Raw HuggingFace tokenizer (exposed for advanced use)."""
+        return self._tokenizer
 
+    # --------------------------------------------------------- encode/decode
 
-class Vocab(TorchVocab):
-    def __init__(self, counter, max_size=None, min_freq=1):
-        self.pad_index  = 0
-        self.unk_index  = 1
-        self.eos_index  = 2
-        self.sos_index  = 3
-        self.mask_index = 4
-        super().__init__(counter, specials=["<pad>", "<unk>", "<eos>", "<sos>", "<mask>"],
-                         max_size=max_size, min_freq=min_freq)
+    def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
+        """Convert a string to a list of sub-word ids."""
+        return self._tokenizer.encode(
+            text, add_special_tokens=add_special_tokens,
+        ).ids
 
-    def to_seq(self, sentece, seq_len, with_eos=False, with_sos=False) -> list:
-        pass
+    def encode_batch(self, texts: Iterable[str]) -> List[List[int]]:
+        """Vectorized encode — use when tokenizing many lines at once."""
+        batch = list(texts)
+        if not batch:
+            return []
+        enc = self._tokenizer.encode_batch(batch, add_special_tokens=False)
+        return [e.ids for e in enc]
 
-    def from_seq(self, seq, join=False, with_pad=False):
-        pass
+    def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str:
+        """Convert a list of sub-word ids back to a string."""
+        return self._tokenizer.decode(list(ids), skip_special_tokens=skip_special_tokens)
 
-    @staticmethod
-    def load_vocab(vocab_path: str) -> 'Vocab':
-        with open(vocab_path, "rb") as f:
-            return pickle.load(f)
+    # -------------------------------------------- legacy Vocab-style helpers
 
-    def save_vocab(self, vocab_path):
-        with open(vocab_path, "wb") as f:
-            pickle.dump(self, f)
+    def to_seq(self, sentence: Union[str, List[str]], seq_len: Optional[int] = None,
+               with_eos: bool = False, with_sos: bool = False,
+               with_len: bool = False):
+        """BPE-aware version of the old ``Vocab.to_seq``.
 
+        If ``sentence`` is a list of whitespace-pre-split tokens, it is re-joined
+        before BPE (BPE works on raw strings, not on pre-tokenized word lists).
+        """
+        if isinstance(sentence, list):
+            sentence = " ".join(sentence)
 
-# Building Vocab with text files
-class WordVocab(Vocab):
-    def __init__(self, texts, max_size=None, min_freq=5):
-       #  print("Building Vocab")
-        counter = Counter()
-        for line in tqdm.tqdm(texts):
-            if isinstance(line, list):
-                words = line
-            else:
-                words = line.replace("\n", "").replace("\t", "").split()
-
-            for word in words:
-                counter[word] += 1
-        super().__init__(counter, max_size=max_size, min_freq=min_freq)
-
-    def to_seq(self, sentence, seq_len=None, with_eos=False, with_sos=False, with_len=False):
-        if isinstance(sentence, str):
-            sentence = sentence.split()
-
-        seq = [self.stoi.get(word, self.unk_index) for word in sentence]
+        seq = self.encode(sentence)
 
         if with_eos:
-            seq += [self.eos_index]  # this would be index 1
+            seq = seq + [self.eos_index]
         if with_sos:
             seq = [self.sos_index] + seq
 
         origin_seq_len = len(seq)
 
-        if seq_len is None:
-            pass
-        elif len(seq) <= seq_len:
-            seq += [self.pad_index for _ in range(seq_len - len(seq))]
-        else:
-            seq = seq[:seq_len]
+        if seq_len is not None:
+            if len(seq) < seq_len:
+                seq = seq + [self.pad_index] * (seq_len - len(seq))
+            else:
+                seq = seq[:seq_len]
 
         return (seq, origin_seq_len) if with_len else seq
 
-    def from_seq(self, seq, join=False, with_pad=False):
-        words = [self.itos[idx]
-                 if idx < len(self.itos)
-                 else "<%d>" % idx
-                 for idx in seq
-                 if not with_pad or idx != self.pad_index]
+    def from_seq(self, seq: Sequence[int], join: bool = True,
+                 with_pad: bool = False) -> Union[str, List[str]]:
+        """Inverse of ``to_seq`` — mirrors the old ``Vocab.from_seq``.
 
-        return " ".join(words) if join else words
+        ``join=True`` returns a decoded string (recommended for BPE).
+        ``join=False`` returns the list of raw sub-word strings.
+        """
+        if join:
+            return self.decode(seq, skip_special_tokens=not with_pad)
+        return [
+            self.itos[idx] if 0 <= idx < len(self.itos) else f"<{idx}>"
+            for idx in seq
+            if with_pad or idx != self.pad_index
+        ]
 
-    @staticmethod
-    def load_vocab(vocab_path: str) -> 'WordVocab':
-        with open(vocab_path, "rb") as f:
-            return pickle.load(f)
+    # ------------------------------------------------------------ persistence
 
+    def save_vocab(self, path: Union[str, Path]) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._tokenizer.save(str(path))
+        return path
 
-def build():
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--corpus_path", required=True, type=str)
-    parser.add_argument("-o", "--output_path", required=True, type=str)
-    parser.add_argument("-s", "--vocab_size", type=int, default=None)
-    parser.add_argument("-e", "--encoding", type=str, default="utf-8")
-    parser.add_argument("-m", "--min_freq", type=int, default=5)
-    args = parser.parse_args()
-
-    with open(args.corpus_path, "r", encoding=args.encoding) as f:
-        vocab = WordVocab(f, max_size=args.vocab_size, min_freq=args.min_freq)
-
-    print("VOCAB SIZE:", len(vocab))
-    vocab.save_vocab(args.output_path)
+    @classmethod
+    def load_vocab(cls, path: Union[str, Path]) -> "BPEVocab":
+        tokenizer = Tokenizer.from_file(str(path))
+        return cls(tokenizer)
 
 
-if __name__ == '__main__':
-    build()
+# Backward-compatible aliases so scripts that still import the old names keep
+# working without code changes.
+Vocab = BPEVocab
+WordVocab = BPEVocab

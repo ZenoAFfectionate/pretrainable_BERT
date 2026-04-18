@@ -1,0 +1,26 @@
+# DeBERTa-Mini — fast iteration / smoke-test profile (~6M parameters).
+
+# --- Architecture ---
+model: deberta
+hidden: 128
+layers: 4
+attn_heads: 4
+dropout: 0.1
+max_relative_positions: 128    # covers the full ±(seq_len-1) range
+
+# --- Context window ---
+seq_len: 128
+
+# --- Training defaults ---
+batch_size: 64
+gradient_accumulation_steps: 4   # effective batch = 64 * 4 = 256 (paper)
+epochs: 20
+lr: 2.0e-4
+warmup_steps: 1000
+weight_decay: 0.01
+grad_clip: 1.0
+beta1: 0.9
+beta2: 0.999
+fp16: true
+num_workers: 4
+log_freq: 20

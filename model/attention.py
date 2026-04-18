@@ -6,65 +6,15 @@ from einops import rearrange
 import torch.nn.functional as F
 
 
-class RotaryEmbedding(nn.Module):
-    """ Implementation of Rotary Positional Embedding """
-
-    def __init__(self, dim, max_seq_len=1024, base=10000):
-        super(RotaryEmbedding, self).__init__()
-        self.dim = dim
-        self.max_seq_len = max_seq_len
-        self.base = base
-
-        # avoid data repetition by generating complete cache
-        self.register_buffer("cos_cached", torch.empty(1, 1, 0, dim))
-        self.register_buffer("sin_cached", torch.empty(1, 1, 0, dim))
-        self._build_cache(max_seq_len)  # initialize cache
-    
-    def _build_cache(self, seq_len, device="cpu"):
-        """ build or extend position cache """
-        if seq_len <= self.cos_cached.shape[2]:
-            return  # no need to extend
-        
-        # recalculate cache size (double)
-        new_max_len = max(seq_len, self.max_seq_len * 2)
-        self.max_seq_len = new_max_len
-        
-        # generate frequency matrix
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.float32) / self.dim))
-        position = torch.arange(new_max_len, dtype=torch.float32, device=device)
-        freqs = torch.einsum("i,j->ij", position, inv_freq)
-        
-        # generate whole positional cache
-        cache = torch.cat([freqs, freqs], dim=-1)
-        
-        # update cache to make sure they are on the correct device 
-        self.register_buffer("cos_cached", cache.cos()[None, None, :, :].to(device))
-        self.register_buffer("sin_cached", cache.sin()[None, None, :, :].to(device))
-
-    @staticmethod
-    def rotate_half(x):
-        x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
-        return torch.cat((-x2, x1), dim=-1)
-
-    def forward(self, q, k):
-        seq_len = q.size(2)  # [batch_size, head_num, seq_len, head_dim]
-        device = q.device
-        
-        # dynamic cache extension
-        if seq_len > self.max_seq_len or self.cos_cached.device != device:
-            self._build_cache(seq_len, device)
-
-        cos = self.cos_cached[:, :, :seq_len, :]  # use cache view
-        sin = self.sin_cached[:, :, :seq_len, :]  # use cache view
-
-        rotated_q = (q * cos) + (self.rotate_half(q) * sin)
-        rotated_k = (k * cos) + (self.rotate_half(k) * sin)
-        
-        return rotated_q, rotated_k
-
-
 class MultiHeadAttention(nn.Module):
-    """ Implementation of the multi-head attention for visual task """
+    """Standard Multi-Head Attention for BERT.
+
+    Delegates the softmax-weighted matmul to
+    ``torch.nn.functional.scaled_dot_product_attention``, which on recent
+    PyTorch + CUDA picks Flash Attention 2 when the inputs qualify. This
+    avoids materializing the [B, H, S, S] attention-score tensor and is
+    substantially faster + more memory-frugal than the hand-rolled version.
+    """
 
     def __init__(self, emb_size, head_num=8, dropout=0.1):
         super().__init__()
@@ -72,37 +22,147 @@ class MultiHeadAttention(nn.Module):
         self.emb_size = emb_size
         self.head_num = head_num
         self.head_dim = emb_size // head_num
-        # fuse the queries, keys and values into one matrix
-        self.q_proj = nn.Linear(emb_size, emb_size, bias=False)
-        self.k_proj = nn.Linear(emb_size, emb_size, bias=False)
-        self.v_proj = nn.Linear(emb_size, emb_size, bias=False)
+        self.dropout_p = dropout
 
-        self.scale = 1 / math.sqrt(self.head_dim)
-        self.attn_drop = nn.Dropout(dropout)
+        # Fused QKV projection: one linear (3*emb_size) beats three separate
+        # linears by avoiding two extra kernel launches and weight loads.
+        self.qkv_proj = nn.Linear(emb_size, 3 * emb_size, bias=True)
         self.projection = nn.Linear(emb_size, emb_size)
-        # initialize the rotary positional embedding
-        self.rotary_embedding = RotaryEmbedding(self.head_dim)
 
         self._init_weights()
 
     def _init_weights(self):
-        """ initialize weights of attention module """
-        nn.init.xavier_uniform_(self.q_proj.weight)
-        nn.init.xavier_uniform_(self.k_proj.weight)
-        nn.init.xavier_uniform_(self.v_proj.weight)
+        nn.init.xavier_uniform_(self.qkv_proj.weight)
+        nn.init.zeros_(self.qkv_proj.bias)
         nn.init.xavier_uniform_(self.projection.weight)
         if self.projection.bias is not None:
             nn.init.zeros_(self.projection.bias)
 
+    def forward(self, x, mask=None):
+        B, S, _ = x.shape
+        H, D = self.head_num, self.head_dim
+
+        qkv = self.qkv_proj(x)  # [B, S, 3*H*D]
+        qkv = qkv.view(B, S, 3, H, D).permute(2, 0, 3, 1, 4)  # [3, B, H, S, D]
+        q, k, v = qkv.unbind(0)
+
+        # SDPA accepts an additive float mask or a bool key-padding mask.
+        # The caller ships a [B, 1, 1, S] bool mask where True = keep.
+        context = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=mask,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            is_causal=False,
+        )  # [B, H, S, D]
+
+        context = context.transpose(1, 2).contiguous().view(B, S, H * D)
+        return self.projection(context)
+
+
+class DisentangledSelfAttention(nn.Module):
+    """
+    DeBERTa Disentangled Self-Attention.
+
+    Attention score between positions i and j is the sum of three terms:
+        A_{i,j} = Q_c_i · K_c_j         (content-to-content)
+                + Q_c_i · K_r_{δ(i,j)}  (content-to-position)
+                + K_c_j · Q_r_{δ(j,i)}  (position-to-content)
+    where δ(i, j) is the relative distance clipped to [-k, k] and shifted to [0, 2k].
+    The combined score is scaled by 1 / sqrt(3 * d_head).
+    """
+
+    def __init__(self, emb_size, head_num=8, dropout=0.1, max_relative_positions=512):
+        super().__init__()
+        assert emb_size % head_num == 0, "embedding size is not divisible by head number"
+        self.emb_size = emb_size
+        self.head_num = head_num
+        self.head_dim = emb_size // head_num
+        self.max_relative_positions = max_relative_positions
+
+        self.q_proj = nn.Linear(emb_size, emb_size, bias=True)
+        self.k_proj = nn.Linear(emb_size, emb_size, bias=True)
+        self.v_proj = nn.Linear(emb_size, emb_size, bias=True)
+
+        self.pos_q_proj = nn.Linear(emb_size, emb_size, bias=True)
+        self.pos_k_proj = nn.Linear(emb_size, emb_size, bias=True)
+
+        self.relative_pos_emb = nn.Parameter(
+            torch.zeros(2 * max_relative_positions + 1, emb_size)
+        )
+
+        self.scale = 1.0 / math.sqrt(3 * self.head_dim)
+        self.attn_drop = nn.Dropout(dropout)
+        self.projection = nn.Linear(emb_size, emb_size)
+
+        # Cache the [S, S] clipped relative-position index: shape depends only
+        # on seq_len + device, not on batch content, so it's safe to memoize.
+        self._rel_idx_cache: dict = {}
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for proj in (self.q_proj, self.k_proj, self.v_proj,
+                     self.pos_q_proj, self.pos_k_proj, self.projection):
+            nn.init.xavier_uniform_(proj.weight)
+            if proj.bias is not None:
+                nn.init.zeros_(proj.bias)
+
+        nn.init.normal_(self.relative_pos_emb, mean=0.0, std=0.02)
+
+    def _get_relative_positions(self, seq_len, device):
+        """Return [seq_len, seq_len] tensor where entry (i, j) = clipped(j - i) + k.
+
+        Memoized per (seq_len, device): the tensor depends only on those two
+        and recomputing it per forward per layer is pure overhead (12 layers
+        × forward + backward = 24 redundant launches per step).
+        """
+        key = (seq_len, device)
+        cached = self._rel_idx_cache.get(key)
+        if cached is not None:
+            return cached
+        positions = torch.arange(seq_len, dtype=torch.long, device=device)
+        rel = positions.unsqueeze(0) - positions.unsqueeze(1)
+        rel = torch.clamp(rel, -self.max_relative_positions, self.max_relative_positions)
+        rel = rel + self.max_relative_positions
+        self._rel_idx_cache[key] = rel
+        return rel
 
     def forward(self, x, mask=None):
-        q = rearrange(self.q_proj(x), 'b n (h d) -> b h n d', h=self.head_num)
-        k = rearrange(self.k_proj(x), 'b n (h d) -> b h n d', h=self.head_num)
-        v = rearrange(self.v_proj(x), 'b n (h d) -> b h n d', h=self.head_num)
+        B, S, _ = x.shape
+        H, D = self.head_num, self.head_dim
 
-        q, k = self.rotary_embedding(q, k)  # apply rotary embedding
+        # Content projections: [B, H, S, D]
+        q_c = rearrange(self.q_proj(x), 'b n (h d) -> b h n d', h=H)
+        k_c = rearrange(self.k_proj(x), 'b n (h d) -> b h n d', h=H)
+        v = rearrange(self.v_proj(x), 'b n (h d) -> b h n d', h=H)
 
-        attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        # Position projections of the relative position embeddings: [H, 2k+1, D]
+        q_r = rearrange(self.pos_q_proj(self.relative_pos_emb), 'n (h d) -> h n d', h=H)
+        k_r = rearrange(self.pos_k_proj(self.relative_pos_emb), 'n (h d) -> h n d', h=H)
+
+        # Content-to-content: [B, H, S, S]
+        attn_cc = torch.matmul(q_c, k_c.transpose(-2, -1))
+
+        # Relative position index matrix: idx[i, j] = clipped(j - i) + k
+        rel_idx = self._get_relative_positions(S, x.device)  # [S, S]
+
+        # Content-to-position:
+        #   cp_score[b, h, i, δ] = q_c[b, h, i] · k_r[h, δ]
+        #   attn_cp[b, h, i, j]  = cp_score[b, h, i, idx[i, j]]
+        cp_score = torch.einsum('bhid,hjd->bhij', q_c, k_r)  # [B, H, S, 2k+1]
+        cp_idx = rel_idx.unsqueeze(0).unsqueeze(0).expand(B, H, S, S)
+        attn_cp = torch.gather(cp_score, dim=-1, index=cp_idx)
+
+        # Position-to-content:
+        #   pc_score[b, h, j, δ] = k_c[b, h, j] · q_r[h, δ]
+        #   attn_pc[b, h, i, j]  = pc_score[b, h, j, idx[j, i]]
+        # Using gather along dim -1 with index shape [B, H, S(=j), S(=i)] directly uses idx[j, i],
+        # then transpose swaps (j, i) -> (i, j).
+        pc_score = torch.einsum('bhjd,hkd->bhjk', k_c, q_r)  # [B, H, S, 2k+1]
+        pc_idx = rel_idx.unsqueeze(0).unsqueeze(0).expand(B, H, S, S)
+        attn_pc = torch.gather(pc_score, dim=-1, index=pc_idx).transpose(-2, -1)
+
+        attn_scores = (attn_cc + attn_cp + attn_pc) * self.scale
 
         if mask is not None:
             attn_scores = attn_scores.masked_fill(~mask, torch.finfo(attn_scores.dtype).min)
@@ -110,7 +170,7 @@ class MultiHeadAttention(nn.Module):
         attn_weights = F.softmax(attn_scores, dim=-1)
         attn_weights = self.attn_drop(attn_weights)
 
-        context  = torch.matmul(attn_weights, v)
-        context  = rearrange(context , 'b h n d -> b n (h d)')
+        context = torch.matmul(attn_weights, v)
+        context = rearrange(context, 'b h n d -> b n (h d)')
 
         return self.projection(context)

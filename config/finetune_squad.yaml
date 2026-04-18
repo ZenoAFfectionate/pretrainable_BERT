@@ -1,0 +1,36 @@
+# SQuAD v1.1 fine-tuning defaults.
+#
+# Fine-tuning re-uses the pre-trained encoder's architecture (hidden / layers /
+# attn_heads / max_relative_positions are *rebuilt from the checkpoint*, NOT
+# re-specified here). What this config pins down is everything that is specific
+# to the downstream task and the optimizer, so you only need to supply paths on
+# the command line:
+#
+#   python main.py finetune \
+#       --config config/finetune_squad.yaml \
+#       --checkpoint result/<pretrain_run>/checkpoints/best_model.pt \
+#       --vocab_path dataset/data/tokenizer/tokenizer.json \
+#       --train_file dataset/tune/squad/train-v1.1.json \
+#       --dev_file   dataset/tune/squad/dev-v1.1.json
+
+# --- Task / context shape ---
+seq_len: 384               # max [SOS]+question+[EOS]+context+[EOS] length
+max_query_len: 64          # truncate longer questions
+max_answer_tokens: 30      # cap on the predicted span length (eval only)
+
+# --- Optimization ---
+epochs: 2
+batch_size: 16
+gradient_accumulation_steps: 2   # effective batch = 16 * 2 = 32 (paper)
+eval_batch_size: 32
+lr: 3.0e-5
+warmup_ratio: 0.1          # warmup fraction of total steps
+weight_decay: 0.01
+grad_clip: 1.0
+beta1: 0.9
+beta2: 0.999
+
+# --- Runtime ---
+fp16: true
+num_workers: 4
+log_freq: 20

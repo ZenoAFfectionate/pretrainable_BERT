@@ -1,0 +1,27 @@
+# DeBERTa-Pro — large-scale configuration (~390M parameters).
+# Disentangled attention on a 24-layer 1024-hidden backbone.
+
+# --- Architecture ---
+model: deberta
+hidden: 1024
+layers: 24
+attn_heads: 16
+dropout: 0.1
+max_relative_positions: 512
+
+# --- Context window ---
+seq_len: 512
+
+# --- Training defaults ---
+batch_size: 16         # per-step micro-batch (fits a single 48GB GPU in fp16)
+gradient_accumulation_steps: 16  # effective batch = 16 * 16 = 256 (paper)
+epochs: 40
+lr: 5.0e-5
+warmup_steps: 20000
+weight_decay: 0.01
+grad_clip: 1.0
+beta1: 0.9
+beta2: 0.999
+fp16: true
+num_workers: 8
+log_freq: 10

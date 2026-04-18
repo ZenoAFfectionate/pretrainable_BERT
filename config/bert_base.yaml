@@ -1,0 +1,29 @@
+# BERT-Base configuration (approx. 110M parameters).
+#
+# Keys here mirror CLI flag names in pretrain.py — any value set below acts
+# as the default for the corresponding flag, and is overridden if that flag
+# is passed on the command line.
+
+# --- Architecture ---
+model: bert            # bert | deberta
+hidden: 768            # per-token hidden dimension
+layers: 12             # number of transformer blocks
+attn_heads: 12         # multi-head attention heads
+dropout: 0.1
+
+# --- Context window ---
+seq_len: 512           # maximum input length (tokens)
+
+# --- Training defaults ---
+batch_size: 32
+gradient_accumulation_steps: 8   # effective batch = 32 * 8 = 256 (paper)
+epochs: 40
+lr: 1.0e-4
+warmup_steps: 10000
+weight_decay: 0.01
+grad_clip: 1.0
+beta1: 0.9
+beta2: 0.999
+fp16: true
+num_workers: 8
+log_freq: 10

@@ -1,0 +1,15 @@
+# Core deep-learning stack
+# torch >= 2.2 is required so that F.scaled_dot_product_attention selects the
+# Flash Attention 2 backend — the key enabler for the attention memory/speed
+# optimization in model/attention.py.
+torch>=2.2
+tokenizers>=0.15
+einops>=0.6
+tqdm>=4.65
+
+# Config files
+pyyaml>=6.0
+
+# Pretraining corpus pipeline (dataset/build_corpus.py)
+datasets>=2.14
+nltk>=3.8

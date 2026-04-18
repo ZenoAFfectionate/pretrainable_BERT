@@ -1,18 +1,32 @@
-# 忽略 dataset 文件夹下的 wikitext 数据集
-dataset/wikitext-2/
-dataset/wikitext-103/
+# --- Data (large, reproducible via dataset/build_corpus.py + curl) ---
+dataset/data/
+dataset/tune/
 
-# 忽略 checkpoint 文件夹
+# --- Training outputs (logs + checkpoints) ---
+result/
 checkpoint/
-
-# 忽略 Python 编译缓存
-__pycache__/
-model/__pycache__/
-dataset/__pycache__/
-
-
-*.csv
-*.txt
+*.pt
+*.ckpt
+*.pkl
 *.bin
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Virtualenvs ---
+.venv/
+venv/
+env/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Misc archives ---
 *.zip
 *.tar.gz

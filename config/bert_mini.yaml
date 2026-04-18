@@ -1,0 +1,26 @@
+# BERT-Mini — fast iteration / smoke-test profile (~5M parameters).
+# Suitable for pipeline validation on small corpora or a single consumer GPU.
+
+# --- Architecture ---
+model: bert            # bert | deberta
+hidden: 128
+layers: 4
+attn_heads: 4
+dropout: 0.1
+
+# --- Context window ---
+seq_len: 128
+
+# --- Training defaults ---
+batch_size: 64
+gradient_accumulation_steps: 4   # effective batch = 64 * 4 = 256 (paper)
+epochs: 20
+lr: 2.0e-4
+warmup_steps: 1000
+weight_decay: 0.01
+grad_clip: 1.0
+beta1: 0.9
+beta2: 0.999
+fp16: true
+num_workers: 4
+log_freq: 20
