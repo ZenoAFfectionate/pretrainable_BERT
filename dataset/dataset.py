@@ -9,9 +9,9 @@ Design choices versus a naive implementation
 * **BPE sub-word tokenization.** The vocabulary is a HuggingFace BPE tokenizer
   (see :class:`dataset.vocab.BPEVocab`), so OOV words are split into known
   pieces instead of collapsing to ``<unk>``.
-* **Pre-tokenize once at load time.** The raw text is tokenized into integer
-  ids when we read the file, in a single batched call to the fast Rust
-  tokenizer, rather than on every ``__getitem__`` invocation.
+* **Offset-based indexing.** Instead of loading all tokenized pairs into RAM,
+  we store byte offsets of valid lines and tokenise on-the-fly in
+  ``__getitem__``. This keeps memory usage at ~1 GB even for 100M+ pairs.
 * **Proper BERT truncation.** We reserve 3 slots for ``[CLS]`` + two
   ``[SEP]`` tokens and truncate the longer of the two sentences one token at
   a time until the pair fits, instead of lopping off the tail and potentially
@@ -19,12 +19,11 @@ Design choices versus a naive implementation
 * **Pre-allocated padded tensors.** We fill ``torch.long`` tensors of the
   target length directly instead of building Python lists and padding with
   list ``extend``.
-* **Invalid lines are filtered at construction time** — no per-index
-  fallbacks that silently duplicate the first valid line.
 * **MLM random replacement skips special tokens** (pad/unk/sos/eos/mask) so
   the "replace with random vocab" branch never substitutes a reserved symbol.
 """
 
+import array
 import random
 from typing import List, Tuple
 
@@ -34,7 +33,7 @@ from torch.utils.data import Dataset
 
 
 class BERTDataset(Dataset):
-    """BERT pre-training dataset backed by an in-memory list of tokenized pairs.
+    """BERT pre-training dataset backed by offset-based on-demand tokenization.
 
     Parameters
     ----------
@@ -58,6 +57,8 @@ class BERTDataset(Dataset):
         self.vocab = vocab
         self.seq_len = seq_len
         self.mask_prob = mask_prob
+        self._corpus_path = corpus_path
+        self._encoding = encoding
 
         # Cache special token ids for fast access in the hot path.
         self.pad_index = vocab.pad_index
@@ -73,56 +74,69 @@ class BERTDataset(Dataset):
         non_special = [i for i in range(self._vocab_size) if i not in self._special_ids]
         self._non_special_ids = non_special
 
-        # Load + pre-tokenize every valid pair into integer id lists.
-        self._pairs: List[Tuple[List[int], List[int]]] = self._load_and_tokenize(
-            corpus_path, encoding,
-        )
+        # Index valid line byte-offsets (NOT the full tokenized content).
+        # Using array('Q') = 8 bytes per offset → ~1.1 GB for 139M pairs.
+        self._offsets = self._index_valid_lines(corpus_path, encoding)
+        self._file = None  # Lazily opened per DataLoader worker
 
-        if not self._pairs:
+        if not self._offsets:
             raise ValueError(f"No valid sentence pairs found in {corpus_path}")
 
     # ------------------------------------------------------------------ I/O
 
-    def _load_and_tokenize(self, path: str, encoding: str):
-        """Pre-tokenize all valid sentence pairs into sub-word id lists."""
-        raw_first: List[str] = []
-        raw_second: List[str] = []
+    def _index_valid_lines(self, path: str, encoding: str):
+        """Scan the corpus and record byte offsets of valid lines.
 
-        with open(path, "r", encoding=encoding) as f:
-            for raw in tqdm.tqdm(f, desc=f"Loading {path}"):
-                line = raw.strip()
+        Uses binary-mode reads so ``f.tell()`` returns reliable byte offsets
+        for later seeking. Stores offsets in a compact ``array('Q')``
+        (unsigned 64-bit ints) instead of Python lists.
+        """
+        offsets = array.array('Q')
+        with open(path, "rb") as f:
+            offset = 0
+            for raw in tqdm.tqdm(f, desc=f"Indexing {path}"):
+                try:
+                    line = raw.decode(encoding).strip()
+                except UnicodeDecodeError:
+                    offset = f.tell()
+                    continue
                 if not line or "\t" not in line:
+                    offset = f.tell()
                     continue
                 parts = line.split("\t")
                 if len(parts) < 2:
+                    offset = f.tell()
                     continue
                 s1, s2 = parts[0].strip(), parts[1].strip()
-                if not s1 or not s2:
-                    continue
-                raw_first.append(s1)
-                raw_second.append(s2)
+                if s1 and s2:
+                    offsets.append(offset)
+                offset = f.tell()
+        return offsets
 
-        if not raw_first:
-            return []
+    def _get_file(self):
+        """Lazily open the corpus file — one handle per DataLoader worker."""
+        if self._file is None:
+            self._file = open(self._corpus_path, "rb")
+        return self._file
 
-        # Batch-encode both halves — the Rust tokenizer is dramatically faster
-        # on a single batched call than per-line Python invocations.
-        ids_first = self.vocab.encode_batch(raw_first)
-        ids_second = self.vocab.encode_batch(raw_second)
-
-        pairs: List[Tuple[List[int], List[int]]] = []
-        for t1, t2 in zip(ids_first, ids_second):
-            if t1 and t2:
-                pairs.append((t1, t2))
-        return pairs
+    def _read_pair(self, index: int) -> Tuple[List[int], List[int]]:
+        """Seek to *index*-th pair and return tokenized (t1_ids, t2_ids)."""
+        offset = self._offsets[index]
+        f = self._get_file()
+        f.seek(offset)
+        raw = f.readline().decode(self._encoding).strip()
+        parts = raw.split("\t")
+        s1 = parts[0].strip()
+        s2 = parts[1].strip()
+        return self.vocab.encode(s1), self.vocab.encode(s2)
 
     # ------------------------------------------------------------- sampling
 
     def __len__(self):
-        return len(self._pairs)
+        return len(self._offsets)
 
     def __getitem__(self, index: int):
-        t1_ids, t2_ids = self._pairs[index]
+        t1_ids, t2_ids = self._read_pair(index)
 
         # NSP: 50% same pair (is_next=1), 50% replace t2 with a random one.
         if random.random() < 0.5:
@@ -174,13 +188,13 @@ class BERTDataset(Dataset):
 
     def _random_pair_second(self, exclude: int) -> List[int]:
         """Return the second sentence of a random pair that isn't ``exclude``."""
-        n = len(self._pairs)
+        n = len(self._offsets)
         if n <= 1:
-            return self._pairs[0][1]
+            return self._read_pair(0)[1]
         while True:
             j = random.randrange(n)
             if j != exclude:
-                return self._pairs[j][1]
+                return self._read_pair(j)[1]
 
     def _mask_tokens(self, ids: List[int]) -> Tuple[List[int], List[int]]:
         """Apply the BERT 15%/80-10-10 masking rule.

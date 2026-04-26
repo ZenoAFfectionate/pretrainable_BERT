@@ -147,7 +147,7 @@ python -m dataset.build_corpus --skip_books --max_articles 50000
 python -m dataset.build_tokenizer \
     --corpus dataset/data/corpus/train.txt \
     --out dataset/data/tokenizer/tokenizer.json \
-    --vocab_size 30000 \
+    --vocab_size 32000 \
     --min_frequency 2
 ```
 
@@ -166,7 +166,7 @@ python main.py pretrain --model bert \
     --hidden 768 --layers 12 --attn_heads 12 \
     --batch_size 32 --seq_len 512 \
     --epochs 40 --lr 1e-4 --warmup_steps 10000 \
-    --fp16 --cuda_devices 0,1 \
+    --fp16 --cuda_devices 1,2 \
     --run_name bert_base
 ```
 

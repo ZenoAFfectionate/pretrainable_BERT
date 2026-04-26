@@ -53,10 +53,11 @@ class _PretrainTrainerBase:
 
         self.tlogger = training_logger
 
-        cuda_devices = parse_cuda_devices(cuda_devices)
         if with_cuda and torch.cuda.device_count() > 1:
             self._log("Using %d GPUs", torch.cuda.device_count())
-            self.model = nn.DataParallel(self.model, device_ids=cuda_devices)
+            # CUDA_VISIBLE_DEVICES already controls which GPUs are visible,
+            # so DataParallel just uses all of them (device_ids=None).
+            self.model = nn.DataParallel(self.model)
 
         self.train_data = train_dataloader
         self.test_data = test_dataloader

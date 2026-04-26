@@ -69,9 +69,14 @@ def load_pretrained_encoder(checkpoint: dict, vocab_size: int,
     encoder = build_encoder(model_type, vocab_size, config)
 
     # DeBERTaLM registers the encoder under both self.bert and self.deberta,
-    # so either prefix works; prefer 'deberta.' for clarity.
-    prefix = "deberta." if model_type == "deberta" else "bert."
-    encoder_state = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
+    # but PyTorch state_dict() deduplication keeps only the first-seen path
+    # ("bert."), so we must try both prefixes and use whichever matches.
+    candidates = ["deberta.", "bert."] if model_type == "deberta" else ["bert."]
+    encoder_state = {}
+    for prefix in candidates:
+        encoder_state = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
+        if encoder_state:
+            break
     missing, unexpected = encoder.load_state_dict(encoder_state, strict=False)
 
     if logger is not None:
